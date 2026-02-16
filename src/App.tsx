@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 // Notice: No more GoogleGenAI import! No more API keys!
 
@@ -12,6 +12,32 @@ function App() {
       text: 'Hello! I\'m your PingPay Agent. Tell me who you want to pay and how much.\n\nExample: "Pay Alice 50 USDC"' 
     }
   ]);
+
+  // 🚨 NEW: Check for success redirect and print receipt on load
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const status = urlParams.get('status');
+    const txStatus = urlParams.get('txStatus');
+    const sessionId = urlParams.get('sessionId');
+
+    if (status === 'success' || txStatus === 'SUCCESS') {
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          text: `✅ Payment Successful!\n\n🧾 **RECEIPT**\nStatus: Completed\nSession ID: ${sessionId || 'Generated'}\n\nThank you for using PayBot! You can show this confirmation to the merchant.`
+        }
+      ]);
+      // Clean up the URL so it doesn't re-trigger if they refresh the page
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (status === 'cancelled') {
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', text: '❌ Payment was cancelled.' }
+      ]);
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
 
   // 1. Send text to our secure backend to parse
   const handleSend = async (e: React.FormEvent) => {
@@ -72,6 +98,9 @@ function App() {
     setMessages(updatedMessages);
 
     try {
+      // 🚨 FIX: Grab the full base URL including the /paybot/ subfolder
+      const baseUrl = window.location.origin + window.location.pathname;
+
       // Call our new Node.js backend
       const response = await fetch('https://paybot-vrg4.onrender.com/api/checkout', {
         method: 'POST',
@@ -79,8 +108,8 @@ function App() {
         body: JSON.stringify({
           amount: paymentData.amount,
           token: paymentData.token,
-          successUrl: window.location.origin + '?status=success',
-          cancelUrl: window.location.origin + '?status=cancelled'
+          successUrl: baseUrl + '?status=success',
+          cancelUrl: baseUrl + '?status=cancelled'
         })
       });
 
