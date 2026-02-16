@@ -5,6 +5,9 @@ function App() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
+  // 🚨 NEW: Added state to track which receipt is currently downloading
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  
   const [messages, setMessages] = useState<any[]>([
     { 
       role: 'assistant', 
@@ -12,20 +15,42 @@ function App() {
     }
   ]);
 
-  // Download functionality
+  // 🚨 FIXED: Bulletproof download function
   const downloadReceipt = async (elementId: string) => {
-    const element = document.getElementById(elementId);
-    if (element) {
-      const canvas = await html2canvas(element, { scale: 2 }); // scale 2 for high-res image
+    try {
+      setDownloadingId(elementId); // Trigger the loading text on the button
+      const element = document.getElementById(elementId);
+      
+      if (!element) {
+        console.error("Receipt element not found!");
+        return;
+      }
+
+      // Take the snapshot
+      const canvas = await html2canvas(element, { 
+        scale: 2, 
+        useCORS: true, 
+        backgroundColor: '#ffffff' // Ensure background is solid white
+      });
+      
       const data = canvas.toDataURL('image/png');
+      
+      // Create an invisible link, attach it to the page, click it, and remove it
       const link = document.createElement('a');
       link.href = data;
       link.download = `PayBot_Receipt_${Date.now()}.png`;
+      document.body.appendChild(link); // Required by some modern browsers
       link.click();
+      document.body.removeChild(link);
+
+    } catch (error) {
+      console.error("Failed to generate receipt:", error);
+      alert("Failed to download the receipt. Please try again.");
+    } finally {
+      setDownloadingId(null); // Reset the button
     }
   };
 
-  // Check for success redirect and print receipt on load
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const status = urlParams.get('status');
@@ -33,7 +58,6 @@ function App() {
     const sessionId = urlParams.get('sessionId');
 
     if (status === 'success' || txStatus === 'SUCCESS') {
-      // 🚨 Pull the data we saved before the redirect
       const lastTx = JSON.parse(localStorage.getItem('lastTx') || '{}');
 
       setMessages((prev) => [
@@ -52,7 +76,6 @@ function App() {
         }
       ]);
       
-      // Clean up the URL and local storage
       localStorage.removeItem('lastTx');
       window.history.replaceState({}, document.title, window.location.pathname);
 
@@ -121,7 +144,6 @@ function App() {
     setMessages(updatedMessages);
 
     try {
-      // 🚨 Save tx details to browser memory before we leave the site!
       localStorage.setItem('lastTx', JSON.stringify({
         amount: paymentData.amount,
         token: paymentData.token,
@@ -179,7 +201,6 @@ function App() {
               }`}>
                 {msg.text}
                 
-                {/* Pending Transaction Card */}
                 {msg.paymentData && (
                   <div className="mt-4 border border-gray-100 bg-gray-50 rounded-xl p-5 shadow-inner">
                     <div className="flex justify-between items-center mb-5 pb-4 border-b border-gray-200">
@@ -210,7 +231,6 @@ function App() {
                   </div>
                 )}
 
-                {/* THE NEW RECEIPT UI */}
                 {msg.isReceipt && (
                   <div className="mt-4 w-72 max-w-full flex flex-col gap-2">
                     <div id={`receipt-${index}`} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden font-sans">
@@ -240,11 +260,13 @@ function App() {
                       </div>
                     </div>
                     
+                    {/* 🚨 FIXED: Download button now shows a loading state and becomes transparent when clicked */}
                     <button 
                       onClick={() => downloadReceipt(`receipt-${index}`)}
-                      className="w-full bg-blue-100 text-blue-700 font-bold py-2 px-4 rounded-lg hover:bg-blue-200 transition text-sm flex justify-center items-center gap-2 shadow-sm"
+                      disabled={downloadingId === `receipt-${index}`}
+                      className="w-full bg-blue-100 text-blue-700 font-bold py-2 px-4 rounded-lg hover:bg-blue-200 transition text-sm flex justify-center items-center gap-2 shadow-sm disabled:opacity-50"
                     >
-                      ⬇️ Download PNG Image
+                      {downloadingId === `receipt-${index}` ? '⏳ Generating...' : '⬇️ Download PNG Image'}
                     </button>
                   </div>
                 )}
