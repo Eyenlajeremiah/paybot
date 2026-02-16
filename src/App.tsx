@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import html2canvas from 'html2canvas';
+import { toPng } from 'html-to-image';
 
 function App() {
   const [input, setInput] = useState('');
@@ -15,10 +15,11 @@ function App() {
     }
   ]);
 
-  // 🚨 FIXED: Bulletproof download function
+  //  FIXED: Bulletproof download function
+  //  FIXED: Using html-to-image for modern Tailwind CSS support
   const downloadReceipt = async (elementId: string) => {
     try {
-      setDownloadingId(elementId); // Trigger the loading text on the button
+      setDownloadingId(elementId); 
       const element = document.getElementById(elementId);
       
       if (!element) {
@@ -26,20 +27,16 @@ function App() {
         return;
       }
 
-      // Take the snapshot
-      const canvas = await html2canvas(element, { 
-        scale: 2, 
-        useCORS: true, 
-        backgroundColor: '#ffffff' // Ensure background is solid white
+      // Take the snapshot natively using html-to-image
+      const dataUrl = await toPng(element, { 
+        pixelRatio: 2, // High resolution
+        backgroundColor: '#ffffff' 
       });
       
-      const data = canvas.toDataURL('image/png');
-      
-      // Create an invisible link, attach it to the page, click it, and remove it
       const link = document.createElement('a');
-      link.href = data;
+      link.href = dataUrl;
       link.download = `PayBot_Receipt_${Date.now()}.png`;
-      document.body.appendChild(link); // Required by some modern browsers
+      document.body.appendChild(link); 
       link.click();
       document.body.removeChild(link);
 
@@ -47,7 +44,7 @@ function App() {
       console.error("Failed to generate receipt:", error);
       alert("Failed to download the receipt. Please try again.");
     } finally {
-      setDownloadingId(null); // Reset the button
+      setDownloadingId(null); 
     }
   };
 
