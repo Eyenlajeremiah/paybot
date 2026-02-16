@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-
-// Notice: No more GoogleGenAI import! No more API keys!
+import html2canvas from 'html2canvas';
 
 function App() {
   const [input, setInput] = useState('');
@@ -13,7 +12,20 @@ function App() {
     }
   ]);
 
-  // 🚨 NEW: Check for success redirect and print receipt on load
+  // Download functionality
+  const downloadReceipt = async (elementId: string) => {
+    const element = document.getElementById(elementId);
+    if (element) {
+      const canvas = await html2canvas(element, { scale: 2 }); // scale 2 for high-res image
+      const data = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = data;
+      link.download = `PayBot_Receipt_${Date.now()}.png`;
+      link.click();
+    }
+  };
+
+  // Check for success redirect and print receipt on load
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const status = urlParams.get('status');
@@ -21,15 +33,29 @@ function App() {
     const sessionId = urlParams.get('sessionId');
 
     if (status === 'success' || txStatus === 'SUCCESS') {
+      // 🚨 Pull the data we saved before the redirect
+      const lastTx = JSON.parse(localStorage.getItem('lastTx') || '{}');
+
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
-          text: `✅ Payment Successful!\n\n🧾 **RECEIPT**\nStatus: Completed\nSession ID: ${sessionId || 'Generated'}\n\nThank you for using PayBot! You can show this confirmation to the merchant.`
+          text: `✅ Payment Successful! Here is your generated receipt.`,
+          isReceipt: true,
+          receiptData: {
+            amount: lastTx.amount || 'Unknown',
+            token: lastTx.token || 'USDC',
+            recipient: lastTx.recipient || 'Unknown',
+            sessionId: sessionId || 'N/A',
+            date: new Date().toLocaleString()
+          }
         }
       ]);
-      // Clean up the URL so it doesn't re-trigger if they refresh the page
+      
+      // Clean up the URL and local storage
+      localStorage.removeItem('lastTx');
       window.history.replaceState({}, document.title, window.location.pathname);
+
     } else if (status === 'cancelled') {
       setMessages((prev) => [
         ...prev,
@@ -39,7 +65,6 @@ function App() {
     }
   }, []);
 
-  // 1. Send text to our secure backend to parse
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
@@ -50,7 +75,6 @@ function App() {
     setIsLoading(true);
 
     try {
-      // Call our new Node.js backend
       const response = await fetch('https://paybot-vrg4.onrender.com/api/parse', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -91,17 +115,21 @@ function App() {
     }
   };
 
-  // 2. Send transaction details to backend to get PingPay URL
   const handlePay = async (messageIndex: number, paymentData: any) => {
     const updatedMessages = [...messages];
     updatedMessages[messageIndex].paymentData.status = 'processing';
     setMessages(updatedMessages);
 
     try {
-      // 🚨 FIX: Grab the full base URL including the /paybot/ subfolder
+      // 🚨 Save tx details to browser memory before we leave the site!
+      localStorage.setItem('lastTx', JSON.stringify({
+        amount: paymentData.amount,
+        token: paymentData.token,
+        recipient: paymentData.recipient
+      }));
+
       const baseUrl = window.location.origin + window.location.pathname;
 
-      // Call our new Node.js backend
       const response = await fetch('https://paybot-vrg4.onrender.com/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -123,7 +151,6 @@ function App() {
 
     } catch (error: any) {
       console.error("Checkout Error:", error);
-      
       const finalMessages = [...messages];
       finalMessages[messageIndex].paymentData.status = 'pending';
       setMessages((prev) => [
@@ -152,6 +179,7 @@ function App() {
               }`}>
                 {msg.text}
                 
+                {/* Pending Transaction Card */}
                 {msg.paymentData && (
                   <div className="mt-4 border border-gray-100 bg-gray-50 rounded-xl p-5 shadow-inner">
                     <div className="flex justify-between items-center mb-5 pb-4 border-b border-gray-200">
@@ -179,6 +207,45 @@ function App() {
                         <span className="animate-spin text-xl">⏳</span> Processing...
                       </button>
                     )}
+                  </div>
+                )}
+
+                {/* THE NEW RECEIPT UI */}
+                {msg.isReceipt && (
+                  <div className="mt-4 w-72 max-w-full flex flex-col gap-2">
+                    <div id={`receipt-${index}`} className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden font-sans">
+                      <div className="bg-green-500 p-3 flex justify-center items-center gap-2">
+                        <span className="text-white text-xl">✓</span>
+                        <h3 className="text-white font-bold text-md m-0">Payment Receipt</h3>
+                      </div>
+                      <div className="p-4 space-y-3 text-sm text-gray-800">
+                        <div className="flex justify-between border-b border-dashed pb-2">
+                          <span className="text-gray-500">Amount Paid</span>
+                          <span className="font-bold">{msg.receiptData.amount} {msg.receiptData.token}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-dashed pb-2">
+                          <span className="text-gray-500">Sent To</span>
+                          <span className="font-bold capitalize">{msg.receiptData.recipient}</span>
+                        </div>
+                        <div className="flex justify-between border-b border-dashed pb-2">
+                          <span className="text-gray-500">Session ID</span>
+                          <span className="font-mono text-[10px] bg-gray-100 p-1 rounded max-w-[100px] truncate" title={msg.receiptData.sessionId}>
+                            {msg.receiptData.sessionId}
+                          </span>
+                        </div>
+                        <div className="flex justify-between pt-1">
+                          <span className="text-gray-500 text-xs">Date</span>
+                          <span className="font-medium text-xs">{msg.receiptData.date}</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <button 
+                      onClick={() => downloadReceipt(`receipt-${index}`)}
+                      className="w-full bg-blue-100 text-blue-700 font-bold py-2 px-4 rounded-lg hover:bg-blue-200 transition text-sm flex justify-center items-center gap-2 shadow-sm"
+                    >
+                      ⬇️ Download PNG Image
+                    </button>
                   </div>
                 )}
               </div>
