@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
-import { GoogleGenAI } from '@google/genai';
+import { useState } from 'react';
+
+// Notice: No more GoogleGenAI import! No more API keys!
 
 function App() {
   const [input, setInput] = useState('');
@@ -12,39 +13,7 @@ function App() {
     }
   ]);
 
-  //  PHASE 5 POLISH: Catch the user returning from PingPay
-  useEffect(() => {
-    // 1. Read the URL parameters
-    const urlParams = new URLSearchParams(window.location.search);
-    const status = urlParams.get('status');
-
-    // 2. If they just finished a successful payment...
-    if (status === 'success') {
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          text: '✅ Welcome back! I have successfully verified your PingPay transaction. The funds have been securely routed and settled.'
-        }
-      ]);
-      // Clean up the URL so refreshing doesn't duplicate the message!
-      window.history.replaceState({}, document.title, window.location.pathname);
-    } 
-    // 3. Or if they backed out of the checkout...
-    else if (status === 'cancelled') {
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          text: '❌ Welcome back. It looks like the payment was cancelled. Let me know when you are ready to try again!'
-        }
-      ]);
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-  }, []); // The empty brackets [] mean this only runs exactly once when the page loads
-
-
-  // 1. THIS HANDLES THE AI PARSING
+  // 1. Send text to our secure backend to parse
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
@@ -55,20 +24,15 @@ function App() {
     setIsLoading(true);
 
     try {
-      const ai = new GoogleGenAI({
-        apiKey: import.meta.env.VITE_GEMINI_API_KEY
+      // Call our new Node.js backend
+      const response = await fetch('https://paybot-vrg4.onrender.com/api/parse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: userMessage.text })
       });
 
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: userMessage.text,
-        config: {
-          systemInstruction: "You are a payment parser. Extract the amount, token, and recipient from the user's message. Return strictly valid JSON in this format: { \"recipient\": \"string\", \"amount\": \"number\", \"token\": \"string\" }. If information is missing, use null.",
-          responseMimeType: "application/json"
-        }
-      });
-
-      const parsedData = JSON.parse(response.text || '{}');
+      if (!response.ok) throw new Error("Backend parsing failed");
+      const parsedData = await response.json();
 
       if (!parsedData.amount || !parsedData.recipient) {
         setMessages((prev) => [
@@ -88,88 +52,64 @@ function App() {
             amount: parsedData.amount,
             token: parsedData.token?.toUpperCase() || 'USDC',
             recipient: parsedData.recipient,
-            status: 'pending' // We set it to pending so the button shows up
+            status: 'pending' 
           }
         }
       ]);
 
     } catch (error) {
       console.error(error);
-      setMessages((prev) => [
-        ...prev, 
-        { role: 'assistant', text: "Oops! Something went wrong while parsing that request." }
-      ]);
+      setMessages((prev) => [...prev, { role: 'assistant', text: "Oops! Something went wrong communicating with the server." }]);
     } finally {
       setIsLoading(false);
     }
   };
-// 🚨 OFFICIAL PINGPAY API INTEGRATION
+
+  // 2. Send transaction details to backend to get PingPay URL
   const handlePay = async (messageIndex: number, paymentData: any) => {
     const updatedMessages = [...messages];
     updatedMessages[messageIndex].paymentData.status = 'processing';
     setMessages(updatedMessages);
 
     try {
-      // Convert amount to smallest units (USDC has 6 decimals, so multiply by 1,000,000)
-      // I convert it to a string as required by the PingPay docs
-      const amountInSmallestUnit = (Number(paymentData.amount) * 1000000).toString();
-
-      // Make the HTTP request via our Vite Proxy (/pingpay-api) to bypass CORS
-      const response = await fetch('/pingpay-api/api/checkout/sessions', {
+      // Call our new Node.js backend
+      const response = await fetch('https://paybot-vrg4.onrender.com/api/checkout', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          //  Official header for PingPay
-          'x-api-key': import.meta.env.VITE_PINGPAY_API_KEY
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          amount: amountInSmallestUnit,
-          asset: {
-            chain: 'NEAR', 
-            symbol: paymentData.token?.toUpperCase() || 'USDC'
-          },
-          successUrl: window.location.origin + '?status=success', 
+          amount: paymentData.amount,
+          token: paymentData.token,
+          successUrl: window.location.origin + '?status=success',
           cancelUrl: window.location.origin + '?status=cancelled'
         })
       });
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Failed to generate PingPay session (Status: ${response.status})`);
+        const errorData = await response.json();
+        throw new Error(errorData.error || "Failed to generate session");
       }
 
-      // 🚨 Extract the official sessionUrl
       const data = await response.json();
-      
-      if (data.sessionUrl) {
-        // Redirect the user to the actual checkout page!
-        window.location.href = data.sessionUrl;
-      } else {
-        throw new Error('API connected, but did not return a sessionUrl');
-      }
+      window.location.href = data.sessionUrl;
 
     } catch (error: any) {
-      console.error("PingPay API Error:", error);
+      console.error("Checkout Error:", error);
       
       const finalMessages = [...messages];
       finalMessages[messageIndex].paymentData.status = 'pending';
       setMessages((prev) => [
         ...finalMessages,
-        {
-          role: 'assistant',
-          text: `❌ API Error: ${error.message}`
-        }
+        { role: 'assistant', text: `❌ Backend Error: ${error.message}` }
       ]);
     }
   };
+
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <header className="bg-white shadow-sm p-4 flex justify-between items-center">
+    <div className="min-h-screen bg-gray-50 flex flex-col font-sans">
+      <header className="bg-white shadow-sm p-4 flex justify-between items-center border-b border-gray-100">
         <h1 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-          <img src="/logo.png" alt="PayBot Logo" className="w-8 h-8 object-contain" />
-          <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">PayBot</span>
+          🤖 <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">PayBot</span>
         </h1>
-        
       </header>
 
       <main className="flex-1 p-4 overflow-y-auto">
@@ -183,38 +123,35 @@ function App() {
               }`}>
                 {msg.text}
                 
-                {/*  Interactive PingPay Checkout Card UI! */}
                 {msg.paymentData && (
-                  <div className="mt-4 border border-gray-100 bg-gray-50 rounded-xl p-4 shadow-inner">
-                    <div className="flex justify-between items-center mb-4">
+                  <div className="mt-4 border border-gray-100 bg-gray-50 rounded-xl p-5 shadow-inner">
+                    <div className="flex justify-between items-center mb-5 pb-4 border-b border-gray-200">
                       <div>
-                        <p className="text-sm text-gray-500 font-medium">Sending to</p>
-                        <p className="font-bold text-gray-900 capitalize">{msg.paymentData.recipient}</p>
+                        <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1">Sending to</p>
+                        <p className="font-bold text-gray-900 text-lg capitalize">{msg.paymentData.recipient}</p>
                       </div>
                       <div className="text-right">
-                        <p className="text-sm text-gray-500 font-medium">Amount</p>
-                        <p className="font-bold text-gray-900">{msg.paymentData.amount} {msg.paymentData.token}</p>
+                        <p className="text-xs text-gray-500 font-bold uppercase tracking-wider mb-1">Amount</p>
+                        <p className="font-bold text-gray-900 text-xl">{msg.paymentData.amount} {msg.paymentData.token}</p>
                       </div>
                     </div>
                     
-                    {/* The button changes based on our API status */}
                     {msg.paymentData.status === 'pending' && (
                       <button 
                         onClick={() => handlePay(index, msg.paymentData)}
-                        className="w-full bg-green-500 text-white font-bold py-3 rounded-lg hover:bg-green-600 transition shadow-sm"
+                        className="w-full bg-green-500 text-white font-bold py-3 px-4 rounded-lg hover:bg-green-600 transition shadow-sm flex items-center justify-center gap-2 text-sm"
                       >
                         Pay via PingPay ⚡
                       </button>
                     )}
 
                     {msg.paymentData.status === 'processing' && (
-                      <button disabled className="w-full bg-yellow-500 text-white font-bold py-3 rounded-lg shadow-sm flex justify-center items-center gap-2">
+                      <button disabled className="w-full bg-yellow-500 text-white font-bold py-3 px-4 rounded-lg shadow-sm flex justify-center items-center gap-2 text-sm">
                         <span className="animate-spin text-xl">⏳</span> Processing...
                       </button>
                     )}
                   </div>
                 )}
-
               </div>
             </div>
           ))}
